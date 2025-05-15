@@ -1,0 +1,118 @@
+services:
+  db:
+    image: postgres:17.5
+    container_name: postgres
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - fyoussef
+
+  redis:
+    image: redis:8.0-alpine
+    container_name: redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - fyoussef
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - 16686:16686 # Jaeger UI
+      - 14268
+      - 14250
+    networks:
+      - fyoussef
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: otel-collector
+    command: [ '--config=/etc/otel-collector-config.yml' ]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml
+    ports:
+      - 1888:1888 # pprof extension
+      - 13133:13133 # health_check extension
+      - 4317:4317 # OTLP gRPC receiver
+      - 4318:4318 # http gRPC receiver
+      - 55679:55679 # zpages extension
+    depends_on:
+      - jaeger
+    networks:
+      - fyoussef
+
+  app: &app
+    build:
+      dockerfile: Dockerfile.dev
+    container_name: app1
+    volumes:
+      - .:/app
+      - /app/node_modules # Evita conflito com node_modules local
+    ports:
+      - 3000:3000
+    mem_limit: 1g # Limite total de memória
+    # mem_reservation: 256m # Mínimo reservado (não garantido)
+    cpus: 0.5 # Limita a meio núcleo de CPU
+    depends_on:
+      - db
+      - redis
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://root:root@db:5432/app?schema=fyoussef
+      - REDIS_URL=redis://redis:6379
+      - TRACE_EXPORTER_URL=http://otel-collector:4318/v1/traces
+    networks:
+      - fyoussef
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`localhost`)"
+      - "traefik.http.routers.app.entrypoints=web"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
+
+  app2:
+    <<: *app
+    container_name: app2
+    ports:
+      - 3001:3000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`localhost`)"
+      - "traefik.http.routers.app.entrypoints=web"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
+
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true" # <--- Necessário para expor em http sem autenticação
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--log.level=DEBUG" # Mostra logs detalhados
+      - "--accesslog=true" # Ativa log de acesso HTTP
+      - "--accesslog.fields.defaultmode=keep" # Mantém todos os campos no log de acesso
+    ports:
+      - "80:80" # Requisições HTTP
+      - "8080:8080" # Dashboard do Traefik
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - fyoussef
+
+volumes:
+  postgres_data:
+  redis_data:
+
+
+networks:
+  fyoussef:
+    driver: bridge

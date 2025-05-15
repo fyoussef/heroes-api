@@ -1,0 +1,23 @@
+# Etapa 1: imagem base
+FROM node:20-alpine
+
+# Diretório de trabalho no container
+WORKDIR /app
+
+# Instala pnpm globalmente
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copia apenas arquivos de definição de dependências primeiro para cache
+COPY pnpm-lock.yaml* package.json* ./
+
+# Instala as dependências
+RUN pnpm install
+
+# Copia o restante da aplicação
+COPY . .
+
+# Expõe a porta padrão do NestJS (alterar se necessário)
+EXPOSE 3000
+
+# Comando para rodar o modo de desenvolvimento (hot-reload)
+CMD ["pnpm", "start:dev"]
